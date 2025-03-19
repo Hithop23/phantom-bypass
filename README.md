@@ -1,4 +1,3 @@
-Aquí tienes el `README.md` en formato Markdown puro:  
 
 ```markdown
 # Phantom Bypass Lab
