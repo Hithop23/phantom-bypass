@@ -1,0 +1,63 @@
+{
+  "manifest_version": 3,
+  "name": "Phantom Bypass Lab",
+  "version": "3.0.1",
+  "description": "LABORATORIO AUTORIZADO - Herramienta ética para pruebas de sistemas de pago",
+  "permissions": [
+    "scripting",
+    "webRequest",
+    "storage",
+    "tabs"
+  ],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "src/core/loader.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": [
+        "src/core/network-interceptor.js",
+        "src/core/websocket-interceptor.js",
+        "src/core/dom-engine.js",
+        "src/stealth/ghost.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": true
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "icons/*",
+        "src/ui/*",
+        "src/libs/*"
+      ],
+      "matches": ["<all_urls>"]
+    }
+  ],
+  "action": {
+    "default_popup": "src/ui/popup.html",
+    "default_icon": {
+      "16": "icons/phantom16.png",
+      "48": "icons/phantom48.png",
+      "128": "icons/phantom128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/phantom16.png",
+    "48": "icons/phantom48.png",
+    "128": "icons/phantom128.png"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'none'"
+  },
+  "externally_connectable": {
+    "matches": [
+      "*://localhost/*",
+      "*://*.lab.internal/*",
+      "*://lab-monitor.internal/*"
+    ]
+  }
+}

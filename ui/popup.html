@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Phantom Lab Control</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <img src="../../icons/phantom48.png" class="logo">
+      <h1>PHANTOM LAB v2.3</h1>
+    </div>
+
+    <div class="status-box">
+      <div class="led" id="statusLed"></div>
+      <span id="connectionStatus">Conectando al laboratorio...</span>
+    </div>
+
+    <div class="controls">
+      <label class="switch">
+        <input type="checkbox" id="bypassToggle">
+        <span class="slider"></span>
+      </label>
+      <span class="control-label">Bypass Activo</span>
+    </div>
+
+    <div class="security-section">
+      <button id="killswitch" class="destruct-btn">
+        🔒 Auto-Destrucción Emergencia
+      </button>
+    </div>
+
+    <div class="logs" id="logContainer">
+      <h3>Registro de Actividad</h3>
+      <div class="log-content" id="logs"></div>
+    </div>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>
