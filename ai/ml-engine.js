@@ -69,43 +69,88 @@ export class PaymentDetector {
   static #lastCacheUpdate = 0;
 
   /** @type {Map<string, string>} */
-  static #elementSelectors = null; // Se compilará en initialize
+  static #elementSelectors = new Map();
+
+  /** @type {Map<string, {scripts: RegExp, apiEndpoints: RegExp, globalKey: string, elements: string[]}>} */
+  static #compiledPatterns = new Map();
 
   /** @type {ReturnType<typeof setTimeout> | null} */
-  static #observerTimeout = null;
+  static #debounceTimeout = null;
+
+  /** @type {number} */
+  static #CONFIDENCE_THRESHOLD = 0.5;
 
   /**
    * Inicializa el detector: compila selectores, inicia observer y carga modelo.
    * @returns {Promise<void>}
    */
   static async initialize() {
+    this.#compilePatterns();
     this.#compileElementSelectors();
     this.#startDOMObservation();
     await this.#loadModel();
   }
 
   /**
+   * Compila las expresiones regulares de los patrones.
+   */
+  static #compilePatterns() {
+    for (const [gateway, pattern] of Object.entries(this.#gatewayPatterns)) {
+      this.#compiledPatterns.set(gateway, {
+        scripts: new RegExp(pattern.scripts, 'i'),
+        apiEndpoints: new RegExp(pattern.apiEndpoints, 'i'),
+        globalKey: pattern.globalKey,
+        elements: pattern.elements
+      });
+    }
+  }
+
+  /**
+   * Escapa caracteres especiales en un selector CSS.
+   * @param {string} str
+   * @returns {string}
+   */
+  static #escapeSelector(str) {
+    return str.replace(/([!"#$%&'()*+,.\/:;<=>?@[\\\]^`{|}~])/g, '\\$1');
+  }
+
+  /**
    * Compila los selectores CSS para una búsqueda más eficiente.
    */
   static #compileElementSelectors() {
-    const map = new Map();
+    this.#elementSelectors.clear();
     for (const [gateway, pattern] of Object.entries(this.#gatewayPatterns)) {
-      const selectors = pattern.elements.flatMap(sel => [
-        `[data-${sel}]`,
-        `.${sel}`,
-        `#${sel}`,
-        `[name="${sel}"]`,
-        `[id*="${sel}"]`
-      ]).join(',');
-      map.set(gateway, selectors);
+      const selector = pattern.elements
+        .flatMap(sel => {
+          const escaped = this.#escapeSelector(sel);
+          return [
+            `[data-${escaped}]`,
+            `.${escaped}`,
+            `#${escaped}`,
+            `[name="${escaped}"]`,
+            `[id*="${escaped}"]`
+          ];
+        })
+        .join(',');
+      this.#elementSelectors.set(gateway, selector);
     }
-    this.#elementSelectors = map;
+  }
+
+  /**
+   * Genera una clave de caché basada en el estado actual de la página.
+   * @returns {string}
+   */
+  static #generateCacheKey() {
+    const scriptsCount = document.scripts.length;
+    const elementsCount = document.querySelectorAll(
+      '[data-stripe], [data-paypal], [data-mercadopago], [data-adyen]'
+    ).length;
+    return `${scriptsCount}-${elementsCount}`;
   }
 
   /**
    * Detecta los gateways de pago presentes en la página.
    * @returns {Promise<GatewayScores>}
-   * @throws {Error} Si hay un error en la detección.
    */
   static async detect() {
     try {
@@ -129,17 +174,11 @@ export class PaymentDetector {
       return normalized;
     } catch (error) {
       console.error('[PaymentDetector] Detection failed:', error);
-      throw new Error(`Payment detection error: ${error.message}`);
+      // Devolver puntajes vacíos en lugar de lanzar error
+      return Object.fromEntries(
+        Object.keys(this.#gatewayPatterns).map(g => [g, 0])
+      );
     }
-  }
-
-  /**
-   * Genera una clave de caché basada en el estado actual de la página.
-   * @returns {string}
-   */
-  static #generateCacheKey() {
-    // Podría mejorarse con un hash de los scripts presentes o un contador de mutaciones
-    return 'default';
   }
 
   /**
@@ -162,11 +201,11 @@ export class PaymentDetector {
    */
   static async #analyzeScripts() {
     try {
-      const scripts = [...document.scripts].map(s => s.src);
+      const scriptSrcs = [...document.scripts].map(s => s.src);
       const result = {};
 
-      for (const [gateway, pattern] of Object.entries(this.#gatewayPatterns)) {
-        result[gateway] = scripts.some(url => pattern.scripts.test(url));
+      for (const [gateway, pattern] of this.#compiledPatterns) {
+        result[gateway] = scriptSrcs.some(url => pattern.scripts.test(url));
       }
       return result;
     } catch (error) {
@@ -179,8 +218,6 @@ export class PaymentDetector {
    * @returns {Promise<Object.<string, boolean>>}
    */
   static async #findPaymentElements() {
-    if (!this.#elementSelectors) this.#compileElementSelectors();
-
     try {
       const result = {};
       for (const [gateway, selector] of this.#elementSelectors) {
@@ -201,7 +238,7 @@ export class PaymentDetector {
       if (!performance?.getEntriesByType) return [];
 
       const entries = performance.getEntriesByType('resource');
-      const patterns = Object.values(this.#gatewayPatterns).map(p => p.apiEndpoints);
+      const patterns = Array.from(this.#compiledPatterns.values()).map(p => p.apiEndpoints);
 
       return entries.filter(entry =>
         patterns.some(pattern => pattern.test(entry.name))
@@ -217,9 +254,10 @@ export class PaymentDetector {
    */
   static async #detectGlobalObjects() {
     const result = {};
-    for (const [gateway, pattern] of Object.entries(this.#gatewayPatterns)) {
+    for (const [gateway, pattern] of this.#compiledPatterns) {
       const globalKey = pattern.globalKey;
-      result[gateway] = !!(window[globalKey] || window[globalKey.toLowerCase()]);
+      // También verificar variantes comunes (como StripeWrapper)
+      result[gateway] = !!(window[globalKey] || window[globalKey + 'Wrapper']);
     }
     return result;
   }
@@ -233,7 +271,7 @@ export class PaymentDetector {
     const weights = await this.#getModelWeights();
     const scores = {};
 
-    for (const [gateway, pattern] of Object.entries(this.#gatewayPatterns)) {
+    for (const [gateway, pattern] of this.#compiledPatterns) {
       const gatewayWeights = weights?.[gateway] || this.#getDefaultWeights();
       scores[gateway] = this.#calculateScore(features, gateway, pattern, gatewayWeights);
     }
@@ -262,7 +300,7 @@ export class PaymentDetector {
    * Calcula el puntaje para un gateway específico.
    * @param {DetectionFeatures} features
    * @param {string} gateway
-   * @param {GatewayPattern} pattern
+   * @param {Object} pattern
    * @param {Object.<string, number>} weights
    * @returns {number}
    */
@@ -283,7 +321,7 @@ export class PaymentDetector {
       score += (weights.global || 1) * weightMap.global;
     }
 
-    return Math.min(score, 1); // Normalizar a máximo 1
+    return Math.min(score, 1);
   }
 
   /**
@@ -325,19 +363,29 @@ export class PaymentDetector {
   }
 
   /**
+   * Crea una función con debounce.
+   * @param {Function} fn
+   * @param {number} delay
+   * @returns {Function}
+   */
+  static #createDebouncedFunction(fn, delay) {
+    let timeout = null;
+    return (...args) => {
+      clearTimeout(timeout);
+      timeout = setTimeout(() => fn(...args), delay);
+    };
+  }
+
+  /**
    * Inicia la observación del DOM con debounce.
    */
   static #startDOMObservation() {
     if (this.#observer) return;
 
-    const debouncedHandler = () => {
-      if (this.#observerTimeout) clearTimeout(this.#observerTimeout);
-      this.#observerTimeout = setTimeout(() => {
-        this.#detectionCache.clear();
-        this.#lastCacheUpdate = 0;
-        this.#observerTimeout = null;
-      }, 300); // 300 ms de espera después de la última mutación
-    };
+    const debouncedReset = this.#createDebouncedFunction(() => {
+      this.#detectionCache.clear();
+      this.#lastCacheUpdate = 0;
+    }, 300);
 
     this.#observer = new MutationObserver(mutations => {
       const hasRelevantChanges = mutations.some(m =>
@@ -345,7 +393,7 @@ export class PaymentDetector {
         (m.type === 'attributes' && m.attributeName?.startsWith('data-'))
       );
       if (hasRelevantChanges) {
-        debouncedHandler();
+        debouncedReset();
       }
     });
 
@@ -353,7 +401,7 @@ export class PaymentDetector {
       subtree: true,
       childList: true,
       attributes: true,
-      attributeFilter: ['data-stripe', 'data-paypal', 'class', 'id']
+      attributeFilter: ['data-stripe', 'data-paypal', 'data-mercadopago', 'data-adyen', 'class', 'id']
     });
   }
 
@@ -378,9 +426,9 @@ export class PaymentDetector {
    * Limpia recursos y desconecta el observer.
    */
   static destroy() {
-    if (this.#observerTimeout) {
-      clearTimeout(this.#observerTimeout);
-      this.#observerTimeout = null;
+    if (this.#debounceTimeout) {
+      clearTimeout(this.#debounceTimeout);
+      this.#debounceTimeout = null;
     }
     this.#observer?.disconnect();
     this.#observer = null;
@@ -388,7 +436,6 @@ export class PaymentDetector {
     this.#modelWeights = null;
     this.#lastCacheUpdate = 0;
     this.#modelLoadingPromise = null;
-    this.#elementSelectors = null;
   }
 
   /**
@@ -413,6 +460,6 @@ export class PaymentDetector {
       return false;
     }
     const scores = await this.detect();
-    return scores[gatewayName] > 0.5; // Umbral de confianza
+    return scores[gatewayName] > this.#CONFIDENCE_THRESHOLD;
   }
 }
